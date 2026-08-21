@@ -740,7 +740,7 @@ export class ChannelStartupService {
 
     const archivedFilter =
       typeof query?.where?.isArchived === 'boolean'
-        ? Prisma.sql`AND "Chat"."isArchived" = ${query.where.isArchived}`
+        ? Prisma.sql`AND COALESCE("Chat"."isArchived", false) = ${query.where.isArchived}`
         : Prisma.sql``;
 
     const limit = query?.take ? Prisma.sql`LIMIT ${query.take}` : Prisma.sql``;
