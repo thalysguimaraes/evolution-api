@@ -799,7 +799,6 @@ export class BaileysStartupService extends ChannelStartupService {
         }
       >[],
     ) => {
-      this.logger.warn('[penta-375] chats.update payload: ' + JSON.stringify(chats.map((chat) => ({ id: chat.id, archived: chat.archived, name: chat.name }))));
       const chatsRaw = chats.map((chat) => {
         return {
           remoteJid: chat.id,
