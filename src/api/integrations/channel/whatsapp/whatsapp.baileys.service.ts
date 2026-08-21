@@ -995,7 +995,7 @@ export class BaileysStartupService extends ChannelStartupService {
           }
         }
 
-        const chatsRaw: { remoteJid: string; instanceId: string; name?: string }[] = [];
+        const chatsRaw: { remoteJid: string; instanceId: string; name?: string; isArchived?: boolean }[] = [];
         const chatsRepository = new Set(
           (await this.prismaRepository.chat.findMany({ where: { instanceId: this.instanceId } })).map(
             (chat) => chat.remoteJid,
