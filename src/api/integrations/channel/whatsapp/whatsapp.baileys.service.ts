@@ -764,6 +764,7 @@ export class BaileysStartupService extends ChannelStartupService {
           instanceId: this.instanceId,
           name: chat.name,
           unreadMessages: chat.unreadCount !== undefined ? chat.unreadCount : 0,
+          isArchived: chat.archived ?? false,
         }));
 
       this.sendDataWebhook(Events.CHATS_UPSERT, chatsToInsert);
@@ -771,6 +772,16 @@ export class BaileysStartupService extends ChannelStartupService {
       if (chatsToInsert.length > 0) {
         if (this.configService.get<Database>('DATABASE').SAVE_DATA.CHATS)
           await this.prismaRepository.chat.createMany({ data: chatsToInsert, skipDuplicates: true });
+      }
+
+      // Backfill archive state for chats that already exist (e.g. full sync after re-pair).
+      for (const chat of chats) {
+        if (existingChatIdSet?.has(chat.id) && chat.archived !== undefined) {
+          await this.prismaRepository.chat.updateMany({
+            where: { instanceId: this.instanceId, remoteJid: chat.id },
+            data: { isArchived: chat.archived },
+          });
+        }
       }
     },
 
@@ -782,15 +793,25 @@ export class BaileysStartupService extends ChannelStartupService {
       >[],
     ) => {
       const chatsRaw = chats.map((chat) => {
-        return { remoteJid: chat.id, instanceId: this.instanceId };
+        return {
+          remoteJid: chat.id,
+          instanceId: this.instanceId,
+          ...(chat.archived !== undefined ? { isArchived: chat.archived } : {}),
+        };
       });
 
       this.sendDataWebhook(Events.CHATS_UPDATE, chatsRaw);
 
       for (const chat of chats) {
         await this.prismaRepository.chat.updateMany({
-          where: { instanceId: this.instanceId, remoteJid: chat.id, name: chat.name },
-          data: { remoteJid: chat.id },
+          where: {
+            instanceId: this.instanceId,
+            remoteJid: chat.id,
+            ...(chat.name ? { name: chat.name } : {}),
+          },
+          data: {
+            ...(chat.archived !== undefined ? { isArchived: chat.archived } : {}),
+          },
         });
       }
     },
@@ -983,10 +1004,21 @@ export class BaileysStartupService extends ChannelStartupService {
 
         for (const chat of chats) {
           if (chatsRepository?.has(chat.id)) {
+            if (chat.archived !== undefined) {
+              await this.prismaRepository.chat.updateMany({
+                where: { instanceId: this.instanceId, remoteJid: chat.id },
+                data: { isArchived: chat.archived },
+              });
+            }
             continue;
           }
 
-          chatsRaw.push({ remoteJid: chat.id, instanceId: this.instanceId, name: chat.name });
+          chatsRaw.push({
+            remoteJid: chat.id,
+            instanceId: this.instanceId,
+            name: chat.name,
+            isArchived: chat.archived ?? false,
+          });
         }
 
         this.sendDataWebhook(Events.CHATS_SET, chatsRaw);

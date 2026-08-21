@@ -738,6 +738,11 @@ export class ChannelStartupService {
         AND "Message"."messageTimestamp" <= ${Math.floor(new Date(query.where.messageTimestamp.lte).getTime() / 1000)}`
         : Prisma.sql``;
 
+    const archivedFilter =
+      typeof query?.where?.isArchived === 'boolean'
+        ? Prisma.sql`AND "Chat"."isArchived" = ${query.where.isArchived}`
+        : Prisma.sql``;
+
     const limit = query?.take ? Prisma.sql`LIMIT ${query.take}` : Prisma.sql``;
     const offset = query?.skip ? Prisma.sql`OFFSET ${query.skip}` : Prisma.sql``;
 
@@ -759,6 +764,7 @@ export class ChannelStartupService {
           "Chat"."createdAt" as "windowStart",
           "Chat"."createdAt" + INTERVAL '24 hours' as "windowExpires",
           "Chat"."unreadMessages" as "unreadMessages",
+          "Chat"."isArchived" as "isArchived",
           CASE WHEN "Chat"."createdAt" + INTERVAL '24 hours' > NOW() THEN true ELSE false END as "windowActive",
           "Message"."id" AS "lastMessageId",
           "Message"."key" AS "lastMessage_key",
@@ -781,6 +787,7 @@ export class ChannelStartupService {
         WHERE "Message"."instanceId" = ${this.instanceId}
         ${remoteJid ? Prisma.sql`AND "Message"."key"->>'remoteJid' = ${remoteJid}` : Prisma.sql``}
         ${timestampFilter}
+        ${archivedFilter}
         ORDER BY "Message"."key"->>'remoteJid', "Message"."messageTimestamp" DESC
       )
       SELECT * FROM rankedMessages 
@@ -820,6 +827,7 @@ export class ChannelStartupService {
           lastMessage: lastMessage ? this.cleanMessageData(lastMessage) : undefined,
           unreadCount: contact.unreadMessages,
           isSaved: !!contact.contactId,
+          isArchived: contact.isArchived ?? false,
         };
       });
 
