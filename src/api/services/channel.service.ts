@@ -615,6 +615,33 @@ export class ChannelStartupService {
       }
     }
 
+    // Fast path: Prisma's `key.path ['remoteJid'] equals` compiles to a jsonb comparison no index
+    // covers (full scan of Message). Chat-scoped reads use the (instanceId, key->>'remoteJid',
+    // messageTimestamp DESC) index through raw SQL instead.
+    if (keyFilters?.remoteJid && !keyFilters.id && !keyFilters.fromMe && !keyFilters.participants
+      && !query?.where?.id && !query?.where?.source && !query?.where?.messageType) {
+      const pageSize = Number(query?.offset) > 0 ? Number(query.offset) : 50;
+      const page = Number(query?.page) > 1 ? Number(query.page) : 1;
+      const tsFilter = timestampFilter['messageTimestamp']
+        ? Prisma.sql`AND "messageTimestamp" >= ${timestampFilter['messageTimestamp'].gte} AND "messageTimestamp" <= ${timestampFilter['messageTimestamp'].lte}`
+        : Prisma.sql``;
+      const [{ count: total }] = await this.prismaRepository.$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(*)::bigint AS count FROM "Message"
+        WHERE "instanceId" = ${this.instanceId} AND "key"->>'remoteJid' = ${keyFilters.remoteJid} ${tsFilter}`;
+      const rows = await this.prismaRepository.$queryRaw<any[]>`
+        SELECT m."id", m."key", m."pushName", m."messageType", m."message", m."messageTimestamp",
+               m."instanceId", m."source", m."contextInfo",
+               (SELECT COALESCE(json_agg(json_build_object('status', u."status")), '[]'::json)
+                  FROM "MessageUpdate" u WHERE u."messageId" = m."id") AS "MessageUpdate"
+        FROM "Message" m
+        WHERE m."instanceId" = ${this.instanceId} AND m."key"->>'remoteJid' = ${keyFilters.remoteJid} ${tsFilter}
+        ORDER BY m."messageTimestamp" DESC
+        LIMIT ${pageSize} OFFSET ${pageSize * (page - 1)}`;
+      return {
+        messages: { total: Number(total), pages: Math.ceil(Number(total) / pageSize), currentPage: page, records: rows },
+      };
+    }
+
     const count = await this.prismaRepository.message.count({
       where: {
         instanceId: this.instanceId,
