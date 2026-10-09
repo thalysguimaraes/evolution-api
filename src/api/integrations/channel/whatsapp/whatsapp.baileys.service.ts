@@ -1043,23 +1043,21 @@ export class BaileysStartupService extends ChannelStartupService {
 
         const messagesRaw: any[] = [];
 
+        // Dedup against the DB per batch. The upstream code loaded every message key of the
+        // instance (millions of JSONB rows) on EVERY history batch; with two instances paired that
+        // alone saturated Postgres. Only the ids in this batch are looked up, on the
+        // (instanceId, key->>'id') index.
+        const batchIds = messages.map((m) => m?.key?.id).filter((id): id is string => typeof id === 'string');
         const messagesRepository: Set<string> = new Set(
           chatwootImport.getRepositoryMessagesCache(instance) ??
-            (
-              await this.prismaRepository.message.findMany({
-                select: { key: true },
-                where: { instanceId: this.instanceId },
-              })
-            ).map((message) => {
-              const key = message.key as { id: string };
-
-              return key.id;
-            }),
+            (batchIds.length === 0
+              ? []
+              : (
+                  await this.prismaRepository.$queryRaw<{ id: string }[]>`
+                    SELECT "key"->>'id' AS id FROM "Message"
+                    WHERE "instanceId" = ${this.instanceId} AND "key"->>'id' IN (${Prisma.join(batchIds)})`
+                ).map((row) => row.id)),
         );
-
-        if (chatwootImport.getRepositoryMessagesCache(instance) === null) {
-          chatwootImport.setRepositoryMessagesCache(instance, messagesRepository);
-        }
 
         for (const m of messages) {
           if (!m.message || !m.key || !m.messageTimestamp) {
