@@ -5072,6 +5072,37 @@ export class BaileysStartupService extends ChannelStartupService {
       }
     }
 
+    // Fast path for chat-scoped reads. Prisma's `key.path ['remoteJid'] equals` compiles to a jsonb
+    // comparison that no index covers (full scan of Message, ~2 GB read per call at 3M rows); the
+    // raw ->> form uses Message_instanceId_remoteJid_messageTimestamp_idx.
+    if (keyFilters?.remoteJid && !keyFilters.remoteJidAlt && !keyFilters.id && !keyFilters.fromMe && !keyFilters.participant
+      && !query?.where?.id && !query?.where?.source && !query?.where?.messageType) {
+      const pageSize = Number(query?.offset) > 0 ? Number(query.offset) : 50;
+      const page = Number(query?.page) > 1 ? Number(query.page) : 1;
+      const ts = timestampFilter['messageTimestamp'];
+      const tsFilter = ts ? Prisma.sql`AND m."messageTimestamp" >= ${ts.gte} AND m."messageTimestamp" <= ${ts.lte}` : Prisma.sql``;
+      const [{ count: total }] = await this.prismaRepository.$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(*)::bigint AS count FROM "Message" m
+        WHERE m."instanceId" = ${this.instanceId} AND m."key"->>'remoteJid' = ${keyFilters.remoteJid} ${tsFilter}`;
+      const rows = await this.prismaRepository.$queryRaw<any[]>`
+        SELECT m."id", m."key", m."pushName", m."messageType", m."message", m."messageTimestamp",
+               m."instanceId", m."source", m."contextInfo",
+               (SELECT COALESCE(json_agg(json_build_object('status', u."status")), '[]'::json)
+                  FROM "MessageUpdate" u WHERE u."messageId" = m."id") AS "MessageUpdate"
+        FROM "Message" m
+        WHERE m."instanceId" = ${this.instanceId} AND m."key"->>'remoteJid' = ${keyFilters.remoteJid} ${tsFilter}
+        ORDER BY m."messageTimestamp" DESC
+        LIMIT ${pageSize} OFFSET ${pageSize * (page - 1)}`;
+      return {
+        messages: {
+          total: Number(total),
+          pages: Math.ceil(Number(total) / pageSize),
+          currentPage: page,
+          records: rows.map((message) => this.formatFetchedMessage(message)),
+        },
+      };
+    }
+
     const count = await this.prismaRepository.message.count({
       where: {
         instanceId: this.instanceId,
@@ -5137,24 +5168,7 @@ export class BaileysStartupService extends ChannelStartupService {
       },
     });
 
-    const formattedMessages = messages.map((message) => {
-      const messageKey = message.key as { fromMe: boolean; remoteJid: string; id: string; participant?: string };
-
-      if (!message.pushName) {
-        if (messageKey.fromMe) {
-          message.pushName = 'Você';
-        } else if (message.contextInfo) {
-          const contextInfo = message.contextInfo as { participant?: string };
-          if (contextInfo.participant) {
-            message.pushName = contextInfo.participant.split('@')[0];
-          } else if (messageKey.participant) {
-            message.pushName = messageKey.participant.split('@')[0];
-          }
-        }
-      }
-
-      return message;
-    });
+    const formattedMessages = messages.map((message) => this.formatFetchedMessage(message));
 
     return {
       messages: {
@@ -5164,5 +5178,22 @@ export class BaileysStartupService extends ChannelStartupService {
         records: formattedMessages,
       },
     };
+  }
+
+  private formatFetchedMessage<T extends { pushName?: string | null; key: unknown; contextInfo?: unknown }>(message: T): T {
+    const messageKey = message.key as { fromMe: boolean; remoteJid: string; id: string; participant?: string };
+    if (!message.pushName) {
+      if (messageKey.fromMe) {
+        message.pushName = 'Você';
+      } else if (message.contextInfo) {
+        const contextInfo = message.contextInfo as { participant?: string };
+        if (contextInfo.participant) {
+          message.pushName = contextInfo.participant.split('@')[0];
+        } else if (messageKey.participant) {
+          message.pushName = messageKey.participant.split('@')[0];
+        }
+      }
+    }
+    return message;
   }
 }
