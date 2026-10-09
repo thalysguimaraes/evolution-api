@@ -628,6 +628,13 @@ export class ChannelStartupService {
       const [{ count: total }] = await this.prismaRepository.$queryRaw<{ count: bigint }[]>`
         SELECT COUNT(*)::bigint AS count FROM "Message"
         WHERE "instanceId" = ${this.instanceId} AND "key"->>'remoteJid' = ${keyFilters.remoteJid} ${tsFilter}`;
+      if (process.env.FIND_MESSAGES_EXPLAIN === 'true') {
+        const plan = await this.prismaRepository.$queryRaw<any[]>`
+          EXPLAIN (ANALYZE, BUFFERS) SELECT m."id" FROM "Message" m
+          WHERE m."instanceId" = ${this.instanceId} AND m."key"->>'remoteJid' = ${keyFilters.remoteJid} ${tsFilter}
+          ORDER BY m."messageTimestamp" DESC LIMIT ${pageSize}`;
+        this.logger.warn('findMessages EXPLAIN\n' + plan.map((r) => r['QUERY PLAN']).join('\n'));
+      }
       const rows = await this.prismaRepository.$queryRaw<any[]>`
         SELECT m."id", m."key", m."pushName", m."messageType", m."message", m."messageTimestamp",
                m."instanceId", m."source", m."contextInfo",
